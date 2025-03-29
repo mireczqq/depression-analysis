@@ -1,0 +1,1393 @@
+---
+title: "Projekt"
+author: "Marcin Mika, Filip Kopańko"
+date: "2025-01-14"
+output: 
+  html_document:
+    df_print: paged
+    code_folding: hide
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+<style>
+body {
+text-align: justify
+}
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+# Wstęp
+
+Celem tej pracy jest przeprowadzenie analizy, zrozumienie oraz
+przewidywanie występowania depresji wśród studentów na podstawie różnych
+czynników społecznych, edukacyjnych oraz zdrowotnych. Projekt opiera się
+na eksploracyjnej analizie dostarczonych danych, obejmujących m.in.
+poziom presji akademickiej, nawyki żywieniowe, długość snu oraz historię
+zdrowotną. Dodatkowo celem jest opracowanie modeli predykcyjnych
+wykorzystujących różne metody uczenia maszynowego (w tym SVM i drzewa
+decyzyjne) oraz analiza interpretowalności wyników w celu identyfikacji
+kluczowych zmiennych wpływających na ryzyko depresji.
+
+# EDA i przygotowanie danych
+
+Dane obejmują 18 kolumn i 27,901 wierszy. Główne zmienne to:
+
+-   **Gender**: Płeć uczestnika (np. Male, Female).
+
+-   **Age**: Wiek uczestnika.
+
+-   **City**: Miejsce zamieszkania.
+
+-   **Profession**: Zawód (np. Student).
+
+-   **Academic Pressure**: Poziom presji akademickiej (skala 0-5).
+
+-   **Work Pressure**: Poziom presji zawodowej (skala 0-5).
+
+-   **CGPA**: Średnia ocen.
+
+-   **Study Satisfaction**: Satysfakcja z nauki (skala 0-5).
+
+-   **Job Satisfaction**: Satysfakcja z pracy (skala 0-4).
+
+-   **Sleep Duration**: Czas trwania snu (np. "5-6 hours").
+
+-   **Dietary Habits**: Nawyki żywieniowe (Healthy, Moderate,
+    Unhealthy).
+
+-   **Degree**: Typ ukończonych studiów.
+
+-   **Have you ever had suicidal thoughts?**: Czy uczestnik miał myśli
+    samobójcze? (Yes/No).
+
+-   **Work/Study Hours**: Godziny pracy/nauki dziennie.
+
+-   **Financial Stress**: Poziom stresu finansowego (skala 1-5).
+
+-   **Family History of Mental Illness**: Historia chorób psychicznych w
+    rodzinie (Yes/No).
+
+-   **Depression**: Czy uczestnik cierpi na depresję? (1: Tak, 0: Nie).
+
+```{r}
+data <- read.csv("Student Depression Dataset.csv")
+data
+```
+
+Do badania bierzemy tylko niepracujących studentów, więc usuwamy
+wszystkie niespełniające tego warunku obserwacje i usuwamy niepotrzebne
+kolumny: '**Job Satisfaction'**, '**Work Pressure**' oraz
+'**Profession**'. Dodatkowo usuwamy zmienną '**City**', ponieważ
+zawierała bardzo dużą liczbę unikalnych wartości, co sprawiało, że
+trudno było ją skutecznie skategoryzować w sposób, który wniósłby
+istotną wartość do analizy.
+
+```{r}
+library(dplyr)
+data <- read.csv("Student Depression Dataset.csv")
+data <- data[data$Profession == "Student" & data$Work.Pressure == 0, ]
+data <- data[, !colnames(data) %in% c("Profession", "Work.Pressure", "Job.Satisfaction", "City")]
+```
+
+Wartości zmiennej '**Degree**' podobnie jak zmiennej '**City**' były
+trudne do skategoryzowania, zdecydowaliśmy się więc na pogrupowanie ich
+w bardziej ogólne kategorie w zależności od poziomu wykształcenia i
+dziedziny nauki (Zmienna '**Degree'** została usunięta).
+
+![](6d11205f-2ac2-4547-bd3a-fb4846bfb2e3.jfif)
+
+![](2abe05ab-ae57-4e8b-8c0d-9d2a9896225b.jfif)
+
+Zmienne kategoryczne: Gender, Sleep.Duration, Dietary.Habits,
+Have.you.ever.had.suicidal.thoughts.., Family.History.of.Mental.Illness,
+Degree_Level, Career_Path
+
+Zmienne liczbowe: Age, Academic.Pressure, CGPA, Study.Satisfaction,
+Work.Study.Hours, Financial.Stress
+
+```{r}
+library(dplyr)
+data <- data %>% filter(Degree != "Others")
+data <- data %>%
+  # Tworzenie kolumny Degree_Level
+  mutate(Degree_Level = case_when(
+    Degree == "Class 12" ~ "High School",
+    Degree %in% c("BA", "B.Ed", "BE", "BHM", "B.Pharm", "BCA", "B.Com", "B.Arch", "B.Tech", "BBA", "BSc", "LLB") ~ "Bachelor's",
+    Degree %in% c("MA", "M.Ed", "MSc", "M.Tech", "M.Pharm", "MBA", "MCA", "M.Com", "ME", "MHM", "LLM") ~ "Master's",
+    Degree %in% c("PhD", "MD", "MBBS") ~ "Doctorate",
+    TRUE ~ "Others"
+  )) 
+
+data <- data %>%
+  mutate(Career_Path = case_when(
+    Degree %in% c("B.Pharm", "BSc", "M.Pharm", "MSc", "MBBS", "MD") ~ "Medical & Science",
+    Degree %in% c("BCA", "BE", "B.Tech", "M.Tech", "MCA", "B.Arch", "ME") ~ "Engineering & Technology",
+    Degree %in% c("LLB", "LLM") ~ "Humanities & Social Sciences",
+    Degree %in% c("B.Ed", "M.Ed") ~ "Education",
+    Degree %in% c("B.Com", "M.Com", "BBA", "MBA", "BHM", "MHM") ~ "Business & Management",
+    Degree %in% c("BA","MA","Class 12", "PhD") ~ "General Development",
+    TRUE ~ NA_character_  # Dla bezpieczeństwa
+  ))
+
+data <- data %>% select(-Degree)
+
+
+```
+
+```{r}
+library(knitr)
+data_model <- data
+data_model <- data_model %>%
+  filter(Sleep.Duration != "Others", 
+         Dietary.Habits != "Others", 
+         CGPA != 0,
+         !is.na(Financial.Stress))
+
+data_model$id <- NULL
+
+data_model$Gender <- as.factor(data_model$Gender)
+data_model$Sleep.Duration <- as.factor(data_model$Sleep.Duration)
+
+data_model$Sleep.Duration <- as.factor(ifelse(data_model$Sleep.Duration == "Less than 5 hours", 1, 
+                             ifelse(data_model$Sleep.Duration == "5-6 hours", 2, 
+                             ifelse(data_model$Sleep.Duration == "7-8 hours", 3,
+                             ifelse(data_model$Sleep.Duration == "More than 8 hours", 4, NA)))))
+
+data_model$Dietary.Habits <- as.factor(ifelse(data_model$Dietary.Habits == "Healthy", 1, 
+                             ifelse(data_model$Dietary.Habits == "Moderate", 2, 
+                             ifelse(data_model$Dietary.Habits == "Unhealthy", 3,
+                             ifelse(data_model$Dietary.Habits == "Others", 4, NA)))))
+
+data_model$Degree_Level <- as.factor(ifelse(data_model$Degree_Level == "High School", 0,
+                           ifelse(data_model$Degree_Level == "Bachelor's", 1,
+                           ifelse(data_model$Degree_Level == "Master's", 2,
+                           ifelse(data_model$Degree_Level == "Doctorate", 3, 4)))))
+
+# Zamiana wartości w kolumnie Career_Path na numeryczne
+data_model$Career_Path <- as.factor(ifelse(data_model$Career_Path == "Medical & Science", 0,
+                          ifelse(data_model$Career_Path == "Engineering & Technology", 1,
+                          ifelse(data_model$Career_Path == "Humanities & Social Sciences", 2,
+                          ifelse(data_model$Career_Path == "Education", 3,
+                          ifelse(data_model$Career_Path == "Business & Management", 4,
+                          ifelse(data_model$Career_Path == "General Development", 5, NA)))))))
+
+                          
+
+
+data_model$Have.you.ever.had.suicidal.thoughts.. <- as.factor(data_model$Have.you.ever.had.suicidal.thoughts..)
+
+data_model$Family.History.of.Mental.Illness <- as.factor(data_model$Family.History.of.Mental.Illness)
+
+data_model$Depression <- as.factor(data_model$Depression)
+data_model$Study.Satisfaction <- as.factor(data_model$Study.Satisfaction)
+data_model$Academic.Pressure <- as.factor(data_model$Academic.Pressure)
+data_model$Financial.Stress <- as.factor(data_model$Financial.Stress)
+data_model$Degree_Level <- as.factor(data_model$Degree_Level)
+data_model$Career_Path <- as.factor(data_model$Career_Path)
+
+structure_table <- data.frame(
+  Variable = names(data_model),
+  Class = sapply(data_model, class),
+  Rows = sapply(data_model, function(x) length(unique(x)))
+)
+
+# Wyświetlenie tabeli
+kable(structure_table, caption = "Struktura danych w model_data")
+```
+
+Usunęliśmy wiersze z brakującymi wartościami (NA) oraz wartościami
+"Others" w wybranych zmiennych. Ponieważ braków danych było niewiele,
+zdecydowaliśmy się je usunąć, zamiast stosować imputację.
+
+Zamieniliśmy wartości tekstowe w zmiennych takich jak Gender,
+Sleep.Duration, Dietary.Habits, Degree_Level i Career_Path na wartości
+numeryczne, aby ułatwić ich analizę ilościową.
+
+Dostosowaliśmy dane, aby były gotowe do dalszej analizy statystycznej i
+budowy modeli predykcyjnych. Wszystkie zmienne są teraz w formie
+liczbowej lub binarnej.
+
+```{r echo=FALSE, results='asis'}
+library(knitr)
+library(kableExtra)
+numeric_vars <- data_model[, sapply(data_model, is.numeric)]
+
+# Obliczanie podsumowania dla zmiennych numerycznych
+numeric_summary <- summary(numeric_vars)
+
+# Wyświetlanie tabeli w formacie HTML z opcją przewijania
+kable(numeric_summary, format = "html", caption = "Summary Table for Numeric Variables") %>%
+  kableExtra::kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                            full_width = TRUE, 
+                            position = "left") %>%
+  kableExtra::scroll_box(width = "100%", height = "320px")
+```
+
+```{r}
+numeric_vars <- names(data_model)[sapply(data_model, function(x) is.numeric(x) && length(unique(x)) > 2)]
+
+
+par(mfrow = c(1,3), mar = c(5, 5, 4, 2)) # Układ 2x5, większe marginesy
+
+# Tworzenie wykresów pudełkowych
+for (var in numeric_vars) {
+  boxplot(data_model[[var]], 
+          main = paste(var), 
+          ylab = "Wartość", 
+          col = "lightblue", 
+          border = "blue", 
+          outline = TRUE) # Rysowanie wartości odstających
+}
+
+# Resetowanie układu
+par(mfrow = c(1, 1))
+```
+
+Zmienna Age zawiera wartości odstające, które wykraczają poza typowy
+zakres zmienności, wskazując na obecność niewielkiej liczby obserwacji
+reprezentujących starsze osoby w analizowanej populacji. Wartości
+odstające w zmiennej Age zastępujemy wartościami odpowiadającymi
+granicom wąsów wykresu pudełkowego, co pozwala na ograniczenie ich
+wpływu na analizę przy jednoczesnym zachowaniu integralności danych.
+
+```{r}
+q1 <- quantile(data_model$Age, 0.25, na.rm = TRUE) # Pierwszy kwartyl
+q3 <- quantile(data_model$Age, 0.75, na.rm = TRUE) # Trzeci kwartyl
+iqr <- q3 - q1                                     # Rozstęp międzykwartylowy
+
+lower_bound <- q1 - 1.5 * iqr                      # Dolna granica
+upper_bound <- q3 + 1.5 * iqr                      # Górna granica
+
+# Zastępowanie wartości odstających granicami IQR
+data_model$Age <- ifelse(data_model$Age < lower_bound, lower_bound,
+                         ifelse(data_model$Age > upper_bound, upper_bound, 
+                                data_model$Age))
+
+```
+
+```{r}
+boxplot(data_model$Age,
+        main = "Age",
+        ylab = "Wiek",
+        col = "lightblue",
+        border = "blue",
+        outline = TRUE, # Pokaż wartości odstające
+        notch = TRUE) 
+
+```
+
+Wykresy częstości:
+
+```{r}
+library(ggplot2)
+categorical_vars <- data_model[, sapply(data_model, is.factor)]
+
+# Pętla do tworzenia wykresów dla każdej zmiennej faktorowej
+for (var_name in names(categorical_vars)) {
+  # Wykres dla zmiennej
+  p <- ggplot(data_model, aes_string(x = var_name)) +
+    geom_bar(fill = "skyblue", color = "black") +
+    ggtitle(paste("Wykres częstości dla zmiennej:", var_name)) +
+    xlab(var_name) +
+    ylab("Częstość") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) # Obrót etykiet na osi X
+  
+  # Wyświetlenie wykresu
+  print(p)
+}
+```
+
+Szczególną uwagę zwróciły wykresy zmiennych Academic.Pressure oraz
+Study.Satisfaction, gdzie wartości 0 są zdecydowanie wartościami
+odstającymi. Postanowiliśmy usunąć te rekordy.
+
+```{r}
+data_model <- data_model[!(data_model$Study.Satisfaction == 0 | data_model$Academic.Pressure == 0), ]
+```
+
+Macierz korelacji zminnej objaśnianej (przedstawionej jako numeryczna) z
+zmiennymi numerycznymi:
+
+```{r}
+library(ggplot2)
+library(reshape2)
+
+# Przykładowe dane
+# data_model <- read.csv("path_to_your_data.csv")
+
+# Przekształć zmienną Depression na zmienną numeryczną
+data_model$Depression <- as.numeric(as.character(data_model$Depression))
+
+# Wybierz tylko zmienne numeryczne
+numeric_vars <- sapply(data_model, is.numeric)
+data_numeric <- data_model[, numeric_vars]
+
+# Oblicz macierz korelacji
+cor_matrix <- cor(data_numeric, use = "complete.obs")
+
+# Przekształć macierz korelacji do formatu długiego
+melted_cor_matrix <- melt(cor_matrix)
+
+# Narysuj macierz korelacji z wartościami
+ggplot(data = melted_cor_matrix, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 4) +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1, 1), space = "Lab", 
+                       name="Korelacja") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 12, hjust = 1)) +
+  coord_fixed()
+
+data_model$Depression <- as.factor(data_model$Depression)
+```
+
+W macierzy korelacji nie występują wysokie wartości (\|r\| ≥ 0.7).
+Zmienne objaśniające nie są ze sobą skorelowane, co jest dobrym
+sygnałem. Z drugiej strony może martwić ich niska korelacja ze zmienną
+objaśnianą.
+
+Macierz V-Cramer zmiennych kategorycznych:
+
+```{r}
+library(vcd)
+library(reshape2)
+library(ggplot2)
+
+# Przykładowe dane
+# data_model <- read.csv("path_to_your_data.csv")
+
+# Wybierz tylko zmienne kategoryczne
+categorical_vars <- sapply(data_model, is.factor)
+data_categorical <- data_model[, categorical_vars]
+
+# Funkcja do obliczania V-Craméra
+cramers_v <- function(x, y) {
+  tbl <- table(x, y)
+  chi2 <- chisq.test(tbl)$statistic
+  n <- sum(tbl)
+  min_dim <- min(dim(tbl)) - 1
+  v <- sqrt(chi2 / (n * min_dim))
+  return(v)
+}
+
+# Oblicz macierz V-Craméra
+var_names <- colnames(data_categorical)
+n <- length(var_names)
+cramer_matrix <- matrix(NA, n, n, dimnames = list(var_names, var_names))
+
+for (i in 1:n) {
+  for (j in 1:n) {
+    cramer_matrix[i, j] <- cramers_v(data_categorical[, i], data_categorical[, j])
+  }
+}
+
+# Przekształć macierz do formatu długiego
+melted_cramer_matrix <- melt(cramer_matrix, na.rm = TRUE)
+
+# Narysuj macierz V-Craméra z wartościami większymi od 0.5
+ggplot(data = melted_cramer_matrix, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  geom_text(data = subset(melted_cramer_matrix, value > 0.5), 
+            aes(label = round(value, 2)), color = "black", size = 4) +
+  scale_fill_gradient2(low = "white", high = "red", mid = "yellow",  
+                       midpoint = 0.5, limit = c(0, 1), space = "Lab", 
+                       name="V-Craméra") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 12, hjust = 1)) +
+  coord_fixed()
+
+```
+
+Największy związek miedzy zmiennymi objaśniającymi istnieje między
+zmiennymi Career_Path i Degree_Level i wynosi 0.55. Są to zmienne
+utworzone z początkowej cechy o nazwie Degree, więc ich nienajniższa
+zależność jest zrozumiała. Zdecydowaliśmy o pozostawieniu ich w badaniu.
+Oprócz tego zienna objaśnana jest najbardziej zależna od zmiennej
+objaśniającej 'Have.you.ever.had.suicidal.thoughts..'
+
+## Zbalansowanie zbioru danych:
+
+```{r}
+library(ggplot2)
+ggplot(data_model, aes(x = factor(Depression))) +  # Zamiana zmiennej na faktor
+  geom_bar(fill = "steelblue") +
+  scale_x_discrete(labels = c("0" = "Nie", "1" = "Tak")) +  # Opcjonalne etykiety dla klas
+  labs(title = "Rozkład zmiennej Depression", x = "Depresja", y = "Liczba przypadków")
+
+# Liczba przypadków w każdej klasie
+print(table(data_model$Depression))
+
+```
+
+```{r}
+# Proporcje klas
+data.frame(prop.table(table(data_model$Depression)))
+```
+
+Proporcja 58,5% do 41,5% oznacza, że zbiór danych jest w miarę
+zrównoważony, ponieważ różnica między klasami zmiennej objaśnianej nie
+jest bardzo duża.
+
+```{r}
+create_depression_plot <- function(data, explanatory_vars, target_var = "Depression") {
+  library(ggplot2)
+  
+  # Exclude specific variables from the plotting process
+  excluded_vars <- c("Work.Pressure", "CGPA", "Job.Satisfaction")
+  explanatory_vars <- setdiff(explanatory_vars, excluded_vars)
+  
+  # Iterate over each explanatory variable and create a plot
+  for (var in explanatory_vars) {
+    # Generate the plot
+    p <- ggplot(data, aes_string(x = var, fill = paste0("factor(", target_var, ")"))) +
+      geom_bar(position = "dodge") +
+      labs(
+        title = paste("Depresja w zależności od", var),
+        x = var,
+        y = "Liczba przypadków"
+      ) +
+      scale_fill_manual(values = c("0" = "blue", "1" = "orange"), name = "Depresja")
+    
+    # Print the plot
+    print(p)
+  }
+}
+
+explanatory_vars <- setdiff(names(data), c("id", "Depression", "City", "Gender", "Profession", "Degree", "Have you ever had suicidal thoughts ?", "Sleep Duration", "Dietary Habits", "Work Pressure", "CGPA", "Job Satisfaction"))
+
+# Call the function
+create_depression_plot(data, explanatory_vars)
+
+```
+
+# Podział na zbiór uczący i testowy
+
+```{r}
+library(caret)
+
+# Ustawienie losowości
+set.seed(123) # Dla reprodukowalności
+
+# Podział danych: 70% uczący, 30% testowy
+train_index <- createDataPartition(data_model$Depression, p = 0.7, list = FALSE)
+
+# Tworzenie zbioru uczącego i testowego
+train_data <- data_model[train_index, ]
+test_data <- data_model[-train_index, ]
+
+# Sprawdzenie rozmiarów zbiorów
+nrow(train_data) # Liczba obserwacji w zbiorze uczącym
+nrow(test_data)  # Liczba obserwacji w zbiorze testowym
+```
+
+# Metdoy uczenia maszynowego
+
+## Drzewa decyzyjne
+
+Parametry do testowania:
+
+-   Reguła podziału (split):
+
+-   gini (indeks Giniego): Minimalizuje impurety w każdym podziale.
+
+-   information (entropia): Maksymalizuje zysk informacji przy każdym
+    podziale.
+
+-   Minimalna liczba obserwacji w węźle końcowym (minbucket - określa
+    minimalną liczbę obserwacji, jakie muszą być w każdym liściu.)
+
+-   Testowane wartości: 50, 500, 2000
+
+-   Minimalna liczba obserwacji do dalszego podziału (minsplit - lczba
+    obserwacji wymagana w węźle, aby był podzielony)
+
+-   Testowane wartości: 50, 500, 2000
+
+-   Maksymalna głębokość drzewa (maxdepth - określa maksymalną liczbę
+    poziomów drzewa)
+
+-   Testowane wartości: 2, 5, 8
+
+```{r}
+library(rpart)
+
+library(caret)
+
+# Listy parametrów do testowania
+split_methods <- c("gini", "information") 
+minbucket_values <- c(50, 500, 2000)
+minsplit_values <- c(50, 500, 2000)
+maxdepth_values <- c(2, 5, 8)
+# Inicjalizacja pustej ramki danych do przechowywania wyników
+results <- data.frame(
+  Split_Method = character(),
+  MinBucket = integer(),
+  MinSplit = integer(),
+  MaxDepth = integer(),
+  Train_Accuracy = numeric(),
+  Test_Accuracy = numeric(),
+  stringsAsFactors = FALSE
+)
+
+best_test_accuracy <- -Inf
+best_model <- NULL
+best_params <- NULL
+
+# Iteracja przez wszystkie kombinacje parametrów
+for (split_method in split_methods) {
+  for (minbucket in minbucket_values) {
+    for (minsplit in minsplit_values) {
+      for (maxdepth in maxdepth_values) {
+        
+        # Tworzenie drzewa decyzyjnego
+        tree <- rpart(Depression ~ ., data = train_data, method = "class",
+                      parms = list(split = split_method),
+                      control = rpart.control(minbucket = minbucket,
+                                              minsplit = minsplit,
+                                              maxdepth = maxdepth))
+        
+        # Predykcja dla zbioru treningowego
+        pred_train <- predict(tree, train_data, type = "class")
+        conf_matrix_train <- confusionMatrix(pred_train, as.factor(train_data$Depression), positive = "1")
+        train_accuracy <- conf_matrix_train$overall['Accuracy']
+        
+        # Predykcja dla zbioru testowego
+        pred_test <- predict(tree, test_data, type = "class")
+        conf_matrix_test <- confusionMatrix(pred_test, as.factor(test_data$Depression), positive = "1")
+        test_accuracy <- conf_matrix_test$overall['Accuracy']
+        
+        # Dodanie wyników do ramki danych
+        results <- rbind(results, data.frame(
+          Split_Method = split_method,
+          MinBucket = minbucket,
+          MinSplit = minsplit,
+          MaxDepth = maxdepth,
+          Train_Accuracy = train_accuracy,
+          Test_Accuracy = test_accuracy
+        ))
+        
+        if (test_accuracy > best_test_accuracy) {
+          best_test_accuracy <- test_accuracy
+          best_model <- tree
+          best_params <- list(
+            Split_Method = split_method,
+            MinBucket = minbucket,
+            MinSplit = minsplit,
+            MaxDepth = maxdepth,
+            Test_Accuracy = test_accuracy
+          )
+        }
+      }
+    }
+  }
+}
+
+
+```
+
+```{r}
+# Wyświetlenie wyników
+data.frame(results)
+```
+
+Żaden z powyższych modeli nie jest przeuczony. Aby lepiej zinterpretować
+hiperparametry pogrupowaliśmy uzyskane wyniki
+
+```{r}
+low_accuracy <- results[results$Test_Accuracy < 0.79, ]
+medium_accuracy <- results[results$Test_Accuracy >= 0.79 & results$Test_Accuracy < 0.81, ]
+high_accuracy <- results[results$Test_Accuracy >= 0.81, ]
+```
+
+Najlepsze wyniki:
+
+```{r}
+high_accuracy
+```
+
+Najgorsze wyniki:
+
+```{r}
+low_accuracy
+```
+
+Najlepsze wyniki uzyskano dla modeli, w których wartość hiperparametru
+MinBucket i MinSplit nie wynosi 2000, ponieważ ustawienie bardzo dużych
+wartości powoduje, że drzewo decyzyjne staje się zbyt proste, co
+skutkuje niedotrenowaniem. Drzewo nie jest w stanie podzielić danych na
+wystarczająco małe grupy, aby uchwycić ważne wzorce oraz ignoruje
+istotne niuanse w danych. Dodatkowo największa głębokość drzewa
+ustawiona na 2 okazała się niewystarczająca.\
+Do dalszego badania wybraliśmy model o następujących parametrach:
+
+```{r}
+data.frame(best_params)
+```
+
+Tak wygląda jego wykres:
+
+```{r}
+library(rpart.plot)
+rpart.plot(best_model,
+           main = "Drzewo decyzyjne (Najlepszy model)",
+           type = 2, # Typ wizualizacji (prostokątne liście)
+           extra = 104, # Wyświetla klasyfikację i prawdopodobieństwo
+           box.palette = "auto", # Automatyczna kolorystyka
+           branch.lty = 3, # Styl gałęzi (linia przerywana)
+           shadow.col = "gray") # Cień dla efektu 3D
+```
+
+1.  Kluczowy wpływ na klasyfikację ma zmienna
+    Have.you.ever.had.suicidal.thoughts.
+
+    -   Jeśli no, większość obserwacji (64%) przechodzi w prawo.
+
+    -   Jeśli yes, mniejszość obserwacji (36%) przechodzi w lewo.
+
+2.  Podziały na kolejnych poziomach:
+
+    Zmienna okrślająca poziom presji na studiach odgrywa istotną rolę na
+    obu gałęziach drzewa:
+
+    -   Dla osób z Academic.Pressure \< 4 (po lewej) obserwujemy dalszy
+        podział na podstawie Financal.Stress.
+
+    -   Dla osób z Academic.Pressure \<3 (po prawej) również analizowany
+        jest Financal.Stress.
+
+3.  Liście:
+
+    -   Każdy liść reprezentuje końcowy podział i zawiera:
+
+        -   **Wynik klasyfikacji** (0 lub 1 dla zmiennej Depression).
+
+        -   **Prawdopodobieństwo** przypisania do każdej klasy (np. 0.77
+            dla klasy 0, 0.33 dla klasy 1).
+
+        -   **Procent obserwacji**, które trafiły do tego liścia. \###
+            Bagging W kontekście drzew decyzyjnych, parametr nbagg
+            odnosi się do liczby drzew, które zostaną wytrenowane w
+            ramach baggingu. Przetestowane wartości parametru to: 10, 50
+            i 100. Pozostałe parametry zostały takie same jak w
+            wcześniej wybranym drzewie
+
+### Bagging
+
+W kontekście drzew decyzyjnych, parametr nbagg odnosi się do liczby
+drzew, które zostaną wytrenowane w ramach baggingu. Przetestowane
+wartości parametru to: 10, 50 i 100. Pozostałe parametry zostały takie
+same jak w wcześniej wybranym drzewie
+
+```{r}
+        library(ipred)
+        library(caret)
+
+        # Wartości nbagg do przetestowania
+        nbagg_values <- c(10, 50, 100)
+
+        # Ramka danych do przechowywania wyników
+        results2 <- data.frame(
+          nbagg = integer(),
+          Train_Accuracy = numeric(),
+          Test_Accuracy = numeric(),
+          stringsAsFactors = FALSE
+        )
+
+        # Iteracja przez różne wartości nbagg
+        for (nbagg in nbagg_values) {
+          set.seed(123)  # Reprodukowalność
+
+          # Bagging z określoną wartością nbagg
+          bagged_model <- bagging(Depression ~ ., data = train_data, 
+                                  nbagg = nbagg,  # Liczba bootstrapowanych drzew
+                                  coob = TRUE,    # Ocena błędu OOB
+                                  control = rpart.control(
+                                    minbucket = best_params$MinBucket,
+                                    minsplit = best_params$MinSplit,
+                                    maxdepth = best_params$MaxDepth
+                                  ))
+
+          # Predykcja na zbiorze treningowym
+          pred_train <- predict(bagged_model, train_data, type = "class")
+          pred_train <- factor(pred_train, levels = levels(train_data$Depression))  # Synchronizacja poziomów
+          conf_matrix_train <- confusionMatrix(pred_train, train_data$Depression, positive = "1")
+          train_accuracy <- conf_matrix_train$overall['Accuracy']
+
+          # Predykcja na zbiorze testowym
+          pred_test <- predict(bagged_model, test_data, type = "class")
+          pred_test <- factor(pred_test, levels = levels(test_data$Depression))  # Synchronizacja poziomów
+          conf_matrix_test <- confusionMatrix(pred_test, test_data$Depression, positive = "1")
+          test_accuracy <- conf_matrix_test$overall['Accuracy']
+
+          # Dodanie wyników do ramki danych
+          results2 <- rbind(results2, data.frame(
+            nbagg = nbagg,
+            Train_Accuracy = train_accuracy,
+            Test_Accuracy = test_accuracy
+          ))
+        }
+
+```
+
+```{r}
+# Wyświetlenie wyników
+        data.frame(results2)
+```
+Bagging nie poprawił wyników modelu. Możliwe, że jest to spowodowane
+dobrym zbalansowaniem danych lub zbyt restrykcyjnymi hiperparametrami.
+
+## Regresja logistyczna
+
+Model zwraca prawdopodobieństwo przynależności do danej klasy (np.
+prawdopodobieństwo przynależności do "1" wynosi 65%). Jeśli
+prawdopodobieństwo przewidywane jest większe niż określony próg (0.5),
+punkt zostaje przypisany do klasy "1"; w przeciwnym razie do klasy "0".
+Zastosowaliśmy przekształcenie one-hot encoding - ważne aby usunąć jedna
+z kolumn, aby uniknąć współliniowości. Tak prezentuje się kilka rekordów
+ze zbioru treningowewgo:
+
+```{r}
+
+library(caret)
+library(fastDummies)
+
+categorical_columns <- names(train_data)[sapply(train_data, is.factor)]
+train_data_encoded <- dummy_cols(
+  train_data,
+  select_columns = categorical_columns,
+  remove_first_dummy = TRUE,  # Usunięcie pierwszej kolumny, aby uniknąć współliniowości
+  remove_selected_columns = TRUE # Usunięcie oryginalnych kolumn
+)
+
+# One-hot encoding dla zbioru testowego
+test_data_encoded <- dummy_cols(
+  test_data,
+  select_columns = categorical_columns,
+  remove_first_dummy = TRUE,  # Usunięcie pierwszej kolumny, aby uniknąć współliniowości
+  remove_selected_columns = TRUE # Usunięcie oryginalnych kolumn
+)
+head(train_data_encoded)
+```
+
+Następnie tworzymy model, kolejno usuwając z niego zmienne nieistotne na
+poziomie 0.05, zaczynając od tej z najwiękaszą wartością p-value.
+Ostateczny model ma następujące parametry:
+
+```{r}
+# Sprawdzenie wyników
+remove_high_p_variables <- function(model, data, p_threshold = 0.1) {
+  while (TRUE) {
+    # Podsumowanie modelu
+    summary_model <- summary(model)
+    
+    # Wyciąganie wartości p dla zmiennych (bez interceptu)
+    p_values <- summary_model$coefficients[-1, 4]  # Pomijamy intercept
+    
+    # Znalezienie zmiennej z najwyższym p-value
+    max_p_value <- max(p_values, na.rm = TRUE)
+    
+    # Jeśli wszystkie p-value są poniżej progu, kończymy pętlę
+    if (max_p_value < p_threshold) break
+    
+    # Zidentyfikowanie nazwy zmiennej do usunięcia
+    variable_to_remove <- names(p_values)[which.max(p_values)]
+    
+    # Wyświetlenie informacji o usuwanej zmiennej
+    cat("Usuwanie zmiennej:", variable_to_remove, "z p-value:", max_p_value, "\n")
+    
+    # Aktualizacja formuły modelu
+    formula <- as.formula(paste("Depression_1 ~ . -", variable_to_remove))
+    model <- update(model, formula, data = data)
+  }
+  
+  # Zwracamy ostateczny model
+  return(model)
+}
+model_logistic <- glm(Depression_1 ~ ., data = train_data_encoded, family = "binomial")
+
+# Uruchomienie funkcji
+final_model <- remove_high_p_variables(model_logistic, train_data_encoded , p_threshold = 0.05)
+
+```
+
+Usunięto kolejno zmienne opisujące:
+
+-   Płeć
+
+-   Drogę kariery (Czy Career_Path należy do podkategorii nr 1 -
+    Engineering & Technology)
+
+-   Drogę kariery (Czy Career_Path należy do podkategorii nr 3 -
+    Education)
+
+-   Poziom naukowy (Czy Degree_Level należy do podkategorii nr 3 -
+    Doctorate)
+
+-   Drogę kariery (Czy Career_Path należy do podkategorii nr 4 -
+    Business & Management)
+
+-   Poziom naukowy (Czy Degree_Level należy do podkategorii nr 1 -
+    Master's)
+
+-   Poziom naukowy (Czy Degree_Level należy do podkategorii nr 2 -
+    Bachelor's)
+
+W skróciie usunięto wpływ całej zmiennej Degree_Level, Gender oraz
+części zmiennej Career_Path.
+
+Tak wyglądają współczynniki istotnych zmiennych:
+
+```{r}
+# Podsumowanie ostatecznego modelu
+library(knitr)
+library(kableExtra)
+
+# Pobranie podsumowania modelu
+model_summary <- summary(final_model)
+
+# Sprawdzenie, czy model to regresja logistyczna (glm z binomial)
+if ("z value" %in% colnames(model_summary$coefficients)) {
+  statistic_column <- "z value"
+  pvalue_column <- "Pr(>|z|)"
+} else {
+  statistic_column <- "t value"
+  pvalue_column <- "Pr(>|t|)"
+}
+
+# Ekstrakcja istotnych informacji do tabeli z obsługą NA
+model_table <- data.frame(
+  Term = rownames(model_summary$coefficients),
+  Estimate = model_summary$coefficients[, "Estimate"],
+  StdError = model_summary$coefficients[, "Std. Error"],
+  Statistic = model_summary$coefficients[, statistic_column],
+  PValue = model_summary$coefficients[, pvalue_column]
+)
+
+# Usunięcie wierszy z wartościami NA
+model_table <- model_table[complete.cases(model_table), ]
+
+# Dodanie kolumny z gwiazdkami dla poziomu istotności
+model_table$Significance <- cut(
+  model_table$PValue,
+  breaks = c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+  labels = c("*", "*", "", ".", ""),
+  right = FALSE
+)
+
+# Formatowanie tabeli
+kable(model_table, caption = "Podsumowanie modelu regresji") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE, 
+                position = "left") %>%
+  column_spec(1, bold = TRUE) %>%
+  add_header_above(c("Parametry Modelu" = 7))
+
+```
+
+Testowanie progów odcięcia regresji logistycznej:
+
+```{r}
+evaluate_thresholds <- function(model, data, actual_col, thresholds) {
+  # Rzeczywiste etykiety
+  actual <- data[[actual_col]]
+  
+  # Predykcja prawdopodobieństw
+  predicted_prob <- predict(model, data, type = "response")
+  
+  # Inicjalizacja wyników
+  results <- data.frame(
+    Threshold = numeric(),
+    Accuracy = numeric(),
+    Precision = numeric(),
+    Recall = numeric(),
+    F1 = numeric(),
+    stringsAsFactors = FALSE
+  )
+  
+  # Testowanie każdego progu
+  for (threshold in thresholds) {
+    # Predykcja klas na podstawie progu
+    predicted_class <- ifelse(predicted_prob >= threshold, 1, 0)
+    
+    # Macierz pomyłek
+    conf_matrix <- table(Predicted = predicted_class, Actual = actual)
+    
+    # Obliczanie metryk
+    true_positive <- conf_matrix[2, 2]
+    false_positive <- conf_matrix[2, 1]
+    true_negative <- conf_matrix[1, 1]
+    false_negative <- conf_matrix[1, 2]
+    
+    accuracy <- (true_positive + true_negative) / sum(conf_matrix)
+    precision <- ifelse((true_positive + false_positive) > 0, 
+                        true_positive / (true_positive + false_positive), 
+                        0)
+    recall <- ifelse((true_positive + false_negative) > 0, 
+                     true_positive / (true_positive + false_negative), 
+                     0)
+    f1 <- ifelse((precision + recall) > 0, 
+                 2 * (precision * recall) / (precision + recall), 
+                 0)
+    
+    # Dodanie wyników do ramki danych
+    results <- rbind(results, data.frame(
+      Threshold = threshold,
+      Accuracy = accuracy,
+      Precision = precision,
+      Recall = recall,
+      F1 = f1
+    ))
+  }
+  
+  return(results)
+}
+
+# Testowanie progów odcięcia
+thresholds <- seq(0.1, 0.9, by = 0.05)  # Zakres progów od 0.1 do 0.9
+results <- evaluate_thresholds(final_model, test_data_encoded, "Depression_1", thresholds)
+
+# Wizualizacja wyników
+library(ggplot2)
+ggplot(results, aes(x = Threshold)) +
+  geom_line(aes(y = Accuracy, color = "Accuracy"), linewidth = 1) +
+  geom_line(aes(y = Precision, color = "Precision"), linewidth = 1) +
+  geom_line(aes(y = Recall, color = "Recall"), linewidth = 1) +
+  geom_line(aes(y = F1, color = "F1-score"), linewidth = 1) +
+  labs(title = "Metryki w zależności od progu odcięcia",
+       x = "Próg odcięcia",
+       y = "Wartość metryki") +
+  scale_color_manual(values = c("Accuracy" = "blue", 
+                                "Precision" = "green", 
+                                "Recall" = "red", 
+                                "F1-score" = "purple"),
+                     name = "Metryki") +
+  theme_minimal()
+```
+
+Najlepszy próg odcięcia:
+
+```{r}
+# Znalezienie najlepszego progu na podstawie F1-score
+best_threshold <- results[which.max(results$F1), ]
+ best_threshold$Threshold
+```
+
+Metryki dla najlepszego progu:
+
+```{r}
+data.frame(best_threshold)
+
+```
+
+Najlepszy próg został wybrany na podstawie wartości metryki F1-score.
+Pozwala ona zachować balans między precyzją i czułością.
+
+![](images/chrome_1tCWJ0YLoX.png)
+
+![](images/chrome_YseBhMlhko.png)
+
+![](images/chrome_uoaSU7q6Ri.png)
+
+Wyniki regresji logistycznej:
+
+Zbiór uczący - macierz pomyłek:
+
+```{r}
+predicted_probabilities <- predict(final_model, newdata = train_data_encoded, type = "response")
+predicted_classes <- ifelse(predicted_probabilities > 0.4, 1, 0)
+confusion_matrix <- table(train_data_encoded$Depression_1, predicted_classes)
+print(confusion_matrix)
+
+accuracy1 <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+print(paste0("Dokładność na zbiorze uczacym: ", accuracy1))
+```
+
+Dokładność na zbiorze uczącym nie wskazuje na przeuczenie modelu.
+
+Zbiór trenigowy - macierz pomyłek:
+
+```{r}
+# Regresja logistyczna na zbiorze testowym
+predicted_probabilities_test <- predict(final_model, newdata = test_data_encoded, type = "response")
+predicted_classes_test <- ifelse(predicted_probabilities_test > 0.4, 1, 0)
+predicted_probabilities <- predicted_probabilities_test
+predicted_classes <- predicted_classes_test
+confusion_matrix_test <- table(test_data_encoded$Depression_1, predicted_classes)
+print(confusion_matrix_test)
+
+#accuracy2 <- sum(diag(confusion_matrix_test)) / sum(confusion_matrix_test)
+#print(paste0("Dokładność na zbiorze testowym: ", accuracy2))
+
+```
+
+## KNN
+
+Algorytm KNN działa w uproszczeniu w 3 krokach:
+
+1\. Oblicza odległości między nowym punktem a wszystkimi punktami w
+zbiorze treningowym
+
+2\. Znajduje k (w tym przypadku 3) najbliższych sąsiadów
+
+3\. Klasyfikuje punkt na podstawie wiekszosci głosów spośród tych
+sąsiadów
+
+```{r}
+columns_to_scale <- c("CGPA", "Work.Study.Hours", "Age")
+train_data_encoded_scale <- train_data_encoded
+test_data_encoded_scale <- test_data_encoded
+# Standaryzacja kolumn numerycznych w zbiorze treningowym
+train_data_encoded_scale[, columns_to_scale] <- scale(train_data_encoded[, columns_to_scale])
+
+# Standaryzacja kolumn numerycznych w zbiorze testowym
+test_data_encoded_scale[, columns_to_scale] <- scale(test_data_encoded[, columns_to_scale])
+library(class)
+
+# Definiowanie cech (bez zmiennej celu)
+features <- colnames(train_data_encoded_scale)[-which(colnames(train_data_encoded_scale) == "Depression_1")]
+
+# Algorytm KNN - Predykcja na zbiorze uczącym
+knn_train <- knn(
+  train = train_data_encoded_scale[, features],  # Cechy zbioru treningowego
+  test = train_data_encoded_scale[, features],  # Cechy zbioru treningowego
+  cl = train_data_encoded_scale$Depression_1,   # Klasy w zbiorze treningowym
+  k = 3,
+  prob = TRUE
+)
+
+
+# Wyniki dla zbioru uczącego
+cat("Macierz pomyłek dla zbioru uczącego:\n")
+print(table(knn_train, train_data_encoded_scale$Depression_1))
+cat("Dokładność - zbiór uczący:", 
+    sum(diag(table(knn_train, train_data_encoded_scale$Depression_1))) / 
+    sum(table(knn_train, train_data_encoded_scale$Depression_1)), "\n")
+
+
+knn_test <- knn(
+  train = train_data_encoded_scale[, features],  # Cechy zbioru treningowego
+  test = test_data_encoded_scale[, features],   # Cechy zbioru testowego
+  cl = train_data_encoded_scale$Depression_1,   # Klasy w zbiorze treningowym
+  k = 3                                         # Liczba sąsiadów
+)
+
+# Wyniki dla zbioru testowego
+cat("\nMacierz pomyłek dla zbioru testowego:\n")
+print(table(knn_test, test_data_encoded_scale$Depression_1))
+cat("Dokładność - zbiór testowy:", 
+    sum(diag(table(knn_test, test_data_encoded_scale$Depression_1))) / 
+    sum(table(knn_test, test_data_encoded_scale$Depression_1)), "\n")
+```
+
+Model osiąga wyższą dokładność na zbiorze treningowym o około 10 punktów
+procentowych, co świadczy o delikatnym przetrenowaniu modelu.
+
+# Analiza uzyskanych wyników
+
+## Krzywa ROC
+
+Krzywa ROC (Receiver Operating Characteristic) przedstawia zależność
+między współczynnikiem prawdziwie pozytywnych wyników (True Positive
+Rate, TPR) a współczynnikiem fałszywie pozytywnych wyników (False
+Positive Rate, FPR) przy różnych progach decyzji.\
+
+**AUC** (Area Under the Curve) to pole pod krzywą ROC i stanowi miarę
+ogólnej skuteczności modelu. Wartość AUC mieści się w przedziale od 0 do
+1:
+
+-   **AUC = 1** oznacza idealny model, który zawsze poprawnie
+    klasyfikuje wszystkie przypadki.
+
+-   **AUC = 0,5** oznacza model losowy, który nie jest lepszy od
+    zgadywania.
+
+-   **AUC \< 0,5** oznacza bardzo zły model, który częściej popełnia
+    błędy niż trafnie klasyfikuje.
+
+Im wyższa wartość AUC, tym lepiej model radzi sobie z rozróżnianiem
+między klasami pozytywnymi a negatywnymi.
+
+```{r}
+# Ładowanie biblioteki
+library(pROC)
+
+# Predykcje prawdopodobieństw z modelu regresji logistycznej
+logistic_predicted_prob <- predict(final_model, test_data_encoded, type = "response")
+
+# Predykcje prawdopodobieństw z najlepszego drzewa decyzyjnego
+tree_predicted_prob <- predict(best_model, test_data, type = "prob")[, 2]  # Prawdopodobieństwo klasy "1"
+
+# Rzeczywiste etykiety (zmienna celu)
+true_labels1 <- as.factor(test_data_encoded$Depression_1)
+true_labels2 <- as.factor(test_data$Depression)
+
+# Krzywa ROC dla regresji logistycznej
+roc_logistic <- roc(true_labels1, logistic_predicted_prob)
+auc_logistic <- auc(roc_logistic)
+
+# Krzywa ROC dla drzewa decyzyjnego
+roc_tree <- roc(true_labels2, tree_predicted_prob)
+auc_tree <- auc(roc_tree)
+
+# Algorytm KNN z przewidywaniem prawdopodobieństw
+knn_test_prob <- knn(
+  train = train_data_encoded_scale[, features],  # Cechy zbioru treningowego
+  test = test_data_encoded_scale[, features],   # Cechy zbioru testowego
+  cl = train_data_encoded_scale$Depression_1,     # Klasy w zbiorze treningowym
+  k = 3,                                        # Liczba sąsiadów
+  prob = TRUE                                   # Zwracanie prawdopodobieństw
+)
+
+# Uzyskiwanie prawdopodobieństw dla klasy "1"
+probabilities_knn <- attr(knn_test_prob, "prob")
+# Korygowanie prawdopodobieństw: musimy uwzględnić, że zwracane są dla przewidywanej klasy
+probabilities_knn <- ifelse(knn_test_prob == "1", probabilities_knn, 1 - probabilities_knn)
+
+# Rzeczywiste etykiety (zmienna celu)
+true_labels3 <- as.factor(test_data_encoded$Depression_1)
+
+# Krzywa ROC dla KNN
+roc_knn <- roc(true_labels3, probabilities_knn)
+auc_knn <- auc(roc_knn)
+
+# Dodanie KNN do wykresu ROC
+plot(roc_logistic, col = "blue", main = "Porównanie krzywych ROC", legacy.axes = TRUE, lwd = 2)
+lines(roc_tree, col = "red", lwd = 2)
+lines(roc_knn, col = "green", lwd = 2)
+
+# Dodanie linii dla klasyfikatora losowego
+abline(a = 0, b = 1, col = "gray", lty = 2)
+
+# Dodanie legendy
+legend("bottomright",
+       legend = c(paste("Regresja logistyczna (AUC =", round(auc_logistic, 2), ")"),
+                  paste("Drzewo decyzyjne (AUC =", round(auc_tree, 2), ")"),
+                  paste("KNN (AUC =", round(auc_knn, 2), ")")),
+       col = c("blue", "red", "green"),
+       lwd = 2)
+
+```
+
+Przekątna na wykresie (linia szara nieprzerywana) reprezentuje model
+losowy, który nie jest lepszy od zgadywania. Model znajdujący się blisko
+tej linii ma niską skuteczność. Im bardziej krzywa zbliża się do lewego
+górnego rogu wykresu, tym lepsza jest jakość klasyfikacji modelu.
+
+```{r}
+# Funkcja obliczająca metryki klasyfikacji
+calculate_metrics <- function(confusion_matrix) {
+  TP <- confusion_matrix[2, 2] # True Positives
+  TN <- confusion_matrix[1, 1] # True Negatives
+  FP <- confusion_matrix[1, 2] # False Positives
+  FN <- confusion_matrix[2, 1] # False Negatives
+  
+  # Obliczenia
+  accuracy <- (TP + TN) / sum(confusion_matrix)
+  precision <- ifelse((TP + FP) > 0, TP / (TP + FP), 0)
+  recall <- ifelse((TP + FN) > 0, TP / (TP + FN), 0)
+  f1_score <- ifelse((precision + recall) > 0, 2 * (precision * recall) / (precision + recall), 0)
+  
+  return(c(Accuracy = accuracy, Precision = precision, Recall = recall, F1_Score = f1_score))
+}
+
+# Funkcja do obliczania i przechowywania wyników
+get_metrics_table <- function(model_name, pred_train, pred_test, train_data, test_data) {
+  # Macierze pomyłek
+  conf_matrix_train <- table(Actual = train_data$Depression, Predicted = pred_train)
+  conf_matrix_test <- table(Actual = test_data$Depression, Predicted = pred_test)
+  
+  # Metryki
+  train_metrics <- calculate_metrics(conf_matrix_train)
+  test_metrics <- calculate_metrics(conf_matrix_test)
+  
+  # Tworzenie tabeli wyników
+  results <- data.frame(
+    Model = model_name,
+    Dataset = c("Train", "Test"),
+    Accuracy = c(train_metrics["Accuracy"], test_metrics["Accuracy"]),
+    Precision = c(train_metrics["Precision"], test_metrics["Precision"]),
+    Recall = c(train_metrics["Recall"], test_metrics["Recall"]),
+    F1_Score = c(train_metrics["F1_Score"], test_metrics["F1_Score"])
+  )
+  
+  return(results)
+}
+
+# Obliczenia dla regresji logistycznej
+logistic_pred_train <- predict(final_model, train_data_encoded, type = "response") > 0.5
+logistic_pred_test <- predict(final_model, test_data_encoded, type = "response") > 0.5
+logistic_metrics <- get_metrics_table("Logistic Regression", logistic_pred_train, logistic_pred_test, train_data_encoded, test_data_encoded)
+
+# Obliczenia dla drzewa decyzyjnego
+tree_pred_train <- predict(best_model, train_data, type = "class")
+tree_pred_test <- predict(best_model, test_data, type = "class")
+tree_metrics <- get_metrics_table("Decision Tree", tree_pred_train, tree_pred_test, train_data, test_data)
+
+knn_metrics <- get_metrics_table("KNN", knn_train, knn_test, train_data_encoded_scale, test_data_encoded_scale)
+
+# Połączenie wyników w jedną tabelę
+final_results <- rbind(logistic_metrics, tree_metrics, knn_metrics)
+
+# Wyświetlenie wyników
+data.frame(final_results)
+
+```
+
+1.  **Logistic Regression**:
+
+    -   Spójne wyniki między danymi treningowymi i testowymi oraz wysoka
+        dokładność (\~0.85)
+
+    -   Wysoka precyzja (\~0.86) i recall (\~0.88), co prowadzi do
+        dobrego balansu (F1-Score \~0.87).
+
+2.  **Decision Tree**:
+
+    -   Wyniki dla danych testowych są zbliżone do treningowych, co
+        sugeruje brak dużego przeuczenia.
+
+    -   Metryki są nieco niższe niż w przypadku Logistic Regression, ale
+        model osiąga dobrą dokładność na zbiorze testowym (\~0.82)
+
+3.  **KNN**:
+
+    -   Najwyższe wyniki na danych treningowych, ale znacząco spadają na
+        danych testowych. Wskazuje to na przeuczenie modelu.
+
+### Wnioski:
+
+-   **Logistic Regression** wydaje się najbardziej stabilnym modelem o
+    dobrym zbalansowaniu metryk.
+
+# Analiza interpetowalności
+
+## Wykresy częściowej zależności (Partial Dependance Plots)
+
+```{r}
+library(pdp)
+library(ggplot2)
+library(gridExtra)
+library(htmltools)
+# Lista zmiennych do usunięcia
+variables_to_remove <- c(
+  "Gender_Male", 
+  "Career_Path_1", 
+  "Career_Path_3", 
+  "Degree_Level_3", 
+  "Career_Path_4", 
+  "Degree_Level_1", 
+  "Degree_Level_2", 
+  "Academic.Pressure_5",
+  "Study.Satisfaction_5"
+)
+
+# Usunięcie zmiennych ze zbioru danych
+cleaned_data <- train_data_encoded[, !(names(train_data_encoded) %in% variables_to_remove)]
+
+# Lista zmiennych użytych w modelu
+variables <- colnames(cleaned_data)[-which(names(cleaned_data) == "Depression_1")]
+
+# Tworzenie listy na wykresy
+pdp_plots <- list()
+
+# Generowanie PDP dla każdej zmiennej
+for (var in variables) {
+  cat("Generowanie PDP dla zmiennej:", var, "\n")
+  
+  # Obliczenie PDP z prawdopodobieństwem dla klasy 1
+  pdp <- partial(
+    object = final_model,
+    pred.var = var,
+    train = train_data_encoded,
+    prob = TRUE,  # Wyliczanie prawdopodobieństw
+    which.class = 2  # Zakładamy, że klasa "1" jest drugą w poziomach
+  )
+  
+  # Tworzenie wykresu PDP
+  pdp_plot <- autoplot(pdp) +
+    ggtitle(paste(var)) +
+    xlab(var) +
+    ylab("Prawdopodobieństwo klasy 1") +
+    theme_minimal(base_size = 10) +
+    theme(
+      plot.title = element_text(size = 6),
+      axis.title = element_text(size = 6),
+      axis.text = element_text(size = 6)
+    )
+  
+  # Dodanie wykresu do listy
+  pdp_plots[[var]] <- pdp_plot
+}
+
+split_plots <- function(plots, ncol) {
+  split(plots, ceiling(seq_along(plots) / ncol))
+}
+
+grouped_plots <- split_plots(pdp_plots, 6)
+
+for (i in seq_along(grouped_plots)) {
+  cat("Renderowanie grupy wykresów:", i, "\n")
+  grid.arrange(grobs = grouped_plots[[i]], ncol = 3)  # 2 kolumny w siatce
+}
+
+```
+
+### Analiza:
+
+1.  **Age (Wiek)**:
+
+    -   Wzrost wieku powoduje wzrost przewidywanej wartości celu, co
+        sugeruje pozytywny wpływ wieku na wynik.
+
+2.  **CGPA (Średnia ocen)**:
+
+    -   Wyraźny negatywny związek – wyższa średnia ocen obniża
+        przewidywaną wartość celu.
+
+Dla reszy zmiennych wnioski będą analogiczne.
+
+# Podsumowanie i wnioski
+
+W badaniu przeanalizowaliśmy trzy rodzaje modeli uczenia maszynowego:
+
+1.  Drzewo decyzyjne (z wykorzystaniem baggingu)
+2.  Regresja logistyczna
+3.  KNN
+
+Spośród nich najlepszym okazał się model regresji logistycznej.
+
+Zmienne o największym wpływie (największe współczynniki lub ich wartości
+bezwzględne):
+
+-   Have.you.ever.had.suicidal.thoughts..\_Yes: Współczynnik: 2.53, p \<
+    0.001 (bardzo istotne). Interpretacja: Studenci, którzy mieli myśli
+    samobójcze, mają znacząco wyższe prawdopodobieństwo depresji w
+    porównaniu do tych, którzy nie mieli takich myśli.
+
+-   Dietary.Habits_3 (Unhealthy): Współczynnik: 1.13, p \< 0.001.
+    Interpretacja: Osoby z niezdrowymi nawykami żywieniowymi są bardziej
+    podatne na depresję w porównaniu do osób z umiarkowanymi lub
+    zdrowymi nawykami żywieniowymi.
+
+-   Financial.Stress_5 (Wysoki poziom stresu finansowego): Współczynnik:
+    2.28, p \< 0.001. Interpretacja: Wysoki poziom stresu finansowego
+    znacząco zwiększa prawdopodobieństwo depresji.
+
+-   Academic.Pressure_1 (Najniższy poziom presji akademickiej):
+    Współczynnik: -3.49, p \< 0.001. Interpretacja: Niższy poziom presji
+    akademickiej jest związany z mniejszym ryzykiem depresji, co
+    sugeruje, że nadmierna presja akademicka może działać jako czynnik
+    ryzyka.
+
+-   Study.Satisfaction_1 (Niska satysfakcja z nauki): Współczynnik:
+    0.98, p \< 0.001. Interpretacja: Niska satysfakcja z nauki wiąże się
+    ze zwiększonym ryzykiem depresji.
